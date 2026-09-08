@@ -1,0 +1,55 @@
+[project]
+name = "de-pipeline"
+version = "0.3.0"
+description = "Week 3 data engineering: ingest from a real paginated, rate-limited HTTP API (httpx + tenacity), land raw to S3, run the warehouse pipeline, and ship it clean with ruff"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "boto3>=1.43.31",
+    "duckdb>=1.5.3",
+    "httpx>=0.28.1",
+    "polars>=1.20.0",
+    "pyarrow>=18.0.0",
+    "python-dotenv>=1.2.2",
+    "tenacity>=9.0.0",
+]
+
+[project.scripts]
+de-pipeline = "de_pipeline.pipeline:main"
+
+[build-system]
+requires = ["uv_build>=0.8.13,<0.9.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.0",
+    "ruff>=0.15.17",
+]
+
+# ---------------------------------------------------------------------------
+# Ruff: linter + formatter. The Day-3 tool. Run `uv run ruff check .` and
+# `uv run ruff format .`.  Docs: https://docs.astral.sh/ruff/
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+# A friendly-but-useful starter rule set.
+#   E/W = pycodestyle, F = pyflakes, I = isort (import sorting),
+#   B   = bugbear,     UP = pyupgrade, SIM = flake8-simplify
+select = ["E", "W", "F", "I", "B", "UP", "SIM"]
+ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+# Tests may have unused fixtures / redefinitions from pytest.
+"tests/*" = ["F811"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

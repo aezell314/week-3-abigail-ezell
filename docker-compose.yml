@@ -1,0 +1,36 @@
+# Local S3-compatible object storage for Week 3 — the RAW LANDING ZONE.
+# This week the *source* is an HTTP API, not S3. But you still land the raw API
+# response into S3 first (the "land raw" principle), then the rest of the
+# pipeline reads from S3 exactly like Weeks 1-2. Start it with:
+#   docker compose up -d
+#
+#   - S3 API endpoint  ->  http://localhost:9000   (boto3 / DuckDB point here)
+#   - Web console      ->  http://localhost:9001   (log in to browse buckets)
+#
+# Uses its own container name + volume so it can coexist with the other weeks.
+# It still binds host ports 9000/9001, so stop the other weeks' stores first
+# (`docker compose down` in that folder) or change the left-hand port numbers.
+services:
+  rustfs:
+    image: rustfs/rustfs:1.0.0-beta.8
+    container_name: de_week3_rustfs
+    ports:
+      - "9000:9000" # S3 API
+      - "9001:9001" # Web console
+    environment:
+      RUSTFS_ACCESS_KEY: rustfsadmin
+      RUSTFS_SECRET_KEY: rustfsadmin
+      RUSTFS_CONSOLE_ENABLE: "true"
+    volumes:
+      - rustfs_week3_data:/data
+    command: ["/data"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-s", "-o", "/dev/null", "http://127.0.0.1:9000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  rustfs_week3_data:

@@ -1,0 +1,23 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+
+# OS / editor junk
+.DS_Store
+.idea/
+
+# Project: local data + secrets
+.env
+data/raw/
+*.duckdb
