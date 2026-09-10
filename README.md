@@ -1,237 +1,364 @@
-# Week 3 — Go Get the Data Yourself (APIs)
+# Week 3 --- API Ingestion Pipeline
 
-Weeks 1-2 the data just *showed up* in S3. Real life isn't like that. This week
-you go get it from a live **HTTP API** and meet the ugly realities that come with
-it — **auth, pagination, and rate limits** — then you land the raw character
-records in S3 and let the pipeline you already built carry it the rest of the way.
+## Project overview
 
-```
-        Rick & Morty API                 S3 / RustFS           DuckDB
- ┌──────────────────────────┐  land raw  ┌──────────────┐ fetch ┌──────────────┐
- │ GET /character?page=1     │ ─────────► │ characters   │ ────► │ raw_characters│
- │ GET /character?page=2     │  (Day 1-2) │ .json (raw)  │ load  │  ↓ transform  │
- │ ... 429? back off & retry │            └──────────────┘       │ clean/summary │
- │ ... until info.next=null  │                                   │ episodes(Polars)
- └──────────────────────────┘                                    └──────────────┘
-   httpx · tenacity                        (the "land raw"        (PROVIDED — the
-   YOU WRITE THIS (api.py)                  principle)             Week 2 toolkit)
-```
+This project extends the existing ELT pipeline from [week 2](https://github.com/aezell314/week-2-abigail-ezell) with a live HTTP
+ingestion stage. Instead of beginning with data that has already been placed in S3, the pipeline now retrieves character data directly from the [Rick and Morty API](https://rickandmortyapi.com/documentation), handles the operational concerns that come with API ingestion, lands the unmodified records in S3-compatible object storage, and then passes them through the existing DuckDB and Polars transformation workflow.
 
-The big idea: **only the front of the pipeline changes.** You swap "read a file
-from S3" for "fetch from an API, then land it to S3." Everything downstream —
-fetch, load, transform — is the same ELT you already know, and it's **provided**
-so you can spend the week on the part that's actually new.
+The completed pipeline handles:
 
-### How this builds on Weeks 1 and 2
+-   HTTP client configuration and optional bearer-token authentication
+-   Multi-page API pagination
+-   `429 Too Many Requests` responses and `Retry-After`
+-   Exponential retry behavior for transient failures
+-   Raw JSON landing in S3-compatible storage
+-   Loading raw character records into DuckDB
+-   Deduplication, cleaning, summarization, and list expansion
+-   End-to-end pipeline orchestration
+-   Linting and automated test coverage
 
-- **Week 1:** download from S3, load raw data into DuckDB, then transform it.
-- **Week 2:** deduplicate with window functions, normalize values, bind SQL
-  parameters, and explode lists in Polars.
-- **Week 3:** apply those patterns to characters and episodes while you build
-  the new HTTP ingestion stage. Auth and retry behavior are tested with fake
-  responses; pagination also runs against the live API.
+## Architecture
 
-This repo is self-contained: you do not need to copy your earlier solutions.
-The provided modules adapt familiar techniques to a new schema; they are not
-identical copies of Week 2. SQL is inline here for reading alongside the Python;
-Week 2's SQL-file refactor remains a useful organization pattern. First run
-`uv run pytest tests/test_load.py tests/test_transform.py` and trace the small
-fixture in `tests/conftest.py`: 6 raw records become 5 characters, 2 species,
-and 3 episode summary rows.
-
-## What's in this repo
-
-| Path | What it is |
-| --- | --- |
-| `docker-compose.yml` | Local S3-compatible store ([RustFS](https://rustfs.com)) — the raw landing zone. |
-| `src/de_pipeline/config.py` | API + S3 settings and clients. **Provided — don't change.** |
-| `src/de_pipeline/api.py` | **Days 1-2, you write this** — httpx ingest: auth, pagination, rate limits, land-to-S3. |
-| `src/de_pipeline/fetch.py` | Download the landed file from S3. **Provided (Week 1-2).** |
-| `src/de_pipeline/load.py` | Load raw into DuckDB. **Provided (Week 1-2).** |
-| `src/de_pipeline/transform.py` | dedup / clean / summarize / explode. **Provided (the Week 2 toolkit).** |
-| `src/de_pipeline/explore.py` | A teammate's quick-and-dirty analysis script. **Day 3 — clean it up.** |
-| `src/de_pipeline/pipeline.py` | **Day 3, you wire this** — ingest → fetch → load → transform. |
-| `tests/` | Checkpoints. The API tests run offline (no network) via a fake transport. |
-
-## One-time setup
-
-You need [`uv`](https://docs.astral.sh/uv/) and Docker. Do these **in order**.
-
-```bash
-uv sync                       # 1. create the environment (.venv/)
-cp .env.example .env          # 2. config (defaults already match; API needs no key)
-docker compose up -d          # 3. start RustFS (the raw landing zone) on :9000 / :9001
+``` text
+        Rick & Morty API                 S3 / RustFS              DuckDB
+ ┌──────────────────────────┐          ┌──────────────┐        ┌───────────────┐
+ │ GET /character?page=1    │  land    │ characters  │ fetch  │ raw_characters│
+ │ GET /character?page=2    │ ───────► │ .json (raw) │ ─────► │       ↓       │
+ │ ...                      │          └──────────────┘        │ clean/summary │
+ │ 429 → back off & retry   │                                  │ episodes      │
+ │ until info.next = null   │                                  │ (Polars)      │
+ └──────────────────────────┘                                  └───────────────┘
+        httpx · tenacity
 ```
 
-> _Confirm step 3:_ wait ~20-30s, then `docker compose ps` shows **healthy**.
-> There's no `generate_data` / `seed_s3` this week — **the API is your source**,
-> and your `api.ingest()` is what fills the bucket.
+The `api.py` module represents the HTTP ingestion stage. It retrieves all character
+pages, applies authentication when configured, handles retryable
+failures, and writes the combined raw records to object storage. From
+that point forward, the existing S3, DuckDB, and Polars components take
+over.
 
-> The Rick and Morty API is public and needs no key. We use it because it's open
-> and requires no signup. You will still wire optional bearer-token auth
-> (`Authorization: Bearer <token>`) and check it with a fake token in tests.
-> Leave `API_TOKEN` blank for the live run.
+## Repository structure
 
-### VS Code
+  -------------------------------------------------------------------------
+  Path                                Purpose
+  ----------------------------------- -------------------------------------
+  `docker-compose.yml`                Runs local S3-compatible
+                                      [RustFS](https://rustfs.com/) as the
+                                      raw landing zone.
 
-Install the Python and **Ruff** extensions if you do not already have them.
-Ruff shows lint inline; the **Testing** panel (beaker icon) runs the checkpoints with a click.
+  `src/de_pipeline/config.py`         Defines API and S3 settings and
+                                      clients.
 
-## The week, day by day
+  `src/de_pipeline/api.py`            Implements HTTP ingestion,
+                                      authentication, pagination, retries,
+                                      and raw S3 landing.
 
-**The rhythm, same as always: write a function → run its test → green → move on.**
-Run `uv run pytest` first to see the map. The API tests use a *fake transport*,
-so they can run without the network or real rate-limiting. They initially fail
-with `NotImplementedError`; the provided load/transform tests should pass.
-Ruff initially reports intentional findings in `explore.py` for Day 3.
+  `src/de_pipeline/fetch.py`          Downloads the landed raw file from
+                                      S3-compatible storage.
 
-> Most checkpoints need no network and no S3. The `test_fetch.py` test talks to
-> real S3 and skips itself when RustFS is down or no file has landed yet.
-> Both `uv run python -m de_pipeline.api` and `uv run de-pipeline` call the live API.
+  `src/de_pipeline/load.py`           Loads raw records into DuckDB.
 
-### Day 1 — your first API call (`api.py`)
+  `src/de_pipeline/transform.py`      Deduplicates, cleans, summarizes, and
+                                      expands the loaded data.
 
-The goal: make one real request, see what comes back, and wire auth.
+  `src/de_pipeline/explore.py`        Provides a lightweight exploration of
+                                      the transformed results.
 
-1. **Build the client.** Implement `build_client()` — an `httpx.Client` pointed at
-   `settings.api_base_url`, sending `Authorization: Bearer <token>` *when* a token
-   is set. Checkpoints:
-   ```bash
-   uv run pytest tests/test_api.py::test_build_client_sends_auth_header_when_token_set
-   uv run pytest tests/test_api.py::test_build_client_omits_auth_header_without_token
-   ```
-2. **Fetch one page.** Implement `fetch_page()` (happy path for now): GET
-   `/character?page=<page>`, raise on HTTP errors, return `response.json()`.
-   ```bash
-   uv run pytest tests/test_api.py::test_fetch_page_returns_results_and_info
-   ```
-   See it for real:
-   ```bash
-   uv run python -m de_pipeline.api
-   ```
-3. **Land it raw.** Implement `land_to_s3()` — upload the records to S3 as one raw
-   JSON array (`put_object`). This is the Week 1 S3 move in reverse. Checkpoint:
-   ```bash
-   uv run pytest tests/test_api.py::test_land_to_s3_uploads_one_json_object
-   ```
+  `src/de_pipeline/pipeline.py`       Orchestrates the complete
+                                      `ingest → fetch → load → transform`
+                                      workflow.
 
-> **The "land raw" principle.** Preserve every character record unchanged,
-> including nested fields and duplicates, before transforming anything. Combine
-> the pages' `results` into one JSON array; this exercise does not save the
-> `info` envelopes or HTTP headers. Each ingest replaces the same S3 object.
-> If a transform is wrong, you re-run it against the raw copy
-> instead of re-hitting (and re-rate-limiting) the API. Raw is your replay buffer.
+  `tests/`                            Covers API behavior, loading,
+                                      transformation, S3 interaction, and
+                                      pipeline orchestration.
+  -------------------------------------------------------------------------
 
-### Day 2 — pagination + rate limits (`api.py`)
+## Setup
 
-One page isn't the dataset. And hammering an API gets you a `429`.
+The project uses [`uv`](https://docs.astral.sh/uv/) for the Python
+environment and Docker for the local object store.
 
-1. **Walk every page.** Implement `fetch_all_characters()` — start at page 1 and
-   keep going while `info.next` isn't null, collecting all `results`. Reuse one
-   client across pages.
-   ```bash
-   uv run pytest tests/test_api.py::test_fetch_all_walks_every_page
-   ```
-2. **Survive rate limits.** A `429 Too Many Requests` means *slow down*, not
-   *fail*. Make `fetch_page` turn a 429 into a retry that honors the server's
-   `Retry-After` header, backing off exponentially otherwise — with **tenacity**.
-   ```bash
-   uv run pytest tests/test_api.py::test_fetch_all_retries_on_429_then_succeeds
-   uv run pytest tests/test_api.py::test_retry_after_header_is_honored
-   ```
-   Also retry transport failures, stop after `MAX_ATTEMPTS` total attempts,
-   and let other HTTP errors fail immediately. For this exercise, support
-   numeric `Retry-After` seconds (including zero); use exponential waits of
-   1, 2, 4, ... seconds, capped at 30 seconds, when the header is absent.
-   HTTP-date headers and malformed values are optional extensions.
-   ```bash
-   uv run pytest tests/test_api.py -k "fetch_page or retry_after or retries"
-   ```
-3. **Tie ingest together.** Implement `ingest()` — `fetch_all_characters()` then
-   `land_to_s3()`. This is the whole new front-of-pipeline stage.
-   ```bash
-   uv run pytest tests/test_api.py::test_ingest_fetches_all_and_lands
-   uv run pytest tests/test_api.py  # all Day 1-2 checkpoints
-   ```
+``` bash
+uv sync
+cp .env.example .env
+docker compose up -d
+```
 
-> The fake transport supplies the 429s; do not hammer the public API to trigger
-> throttling. See the [API documentation](https://rickandmortyapi.com/documentation)
-> for the real response schema and pagination contract.
->
-> **Why honor `Retry-After`?** The server is telling you exactly how long to wait.
-> A fixed `sleep(5)` either wastes time or comes back too early and gets throttled
-> again. Read the header. And why a library (tenacity) instead of a hand-rolled
-> loop? Backoff, jitter, attempt caps, and "retry only these errors" are easy to
-> get subtly wrong — this is exactly the kind of thing you don't reinvent.
+RustFS exposes the local S3-compatible service on ports `9000` and
+`9001`. After startup, its status can be checked with:
 
-### Day 3 — code quality + consolidation (`pipeline.py`, `explore.py`, ruff)
+``` bash
+docker compose ps
+```
 
-Working isn't the same as *shippable*. Today you put on the code-reviewer hat.
+It may take roughly 20--30 seconds for the service to report as healthy.
 
-1. **Clean up with ruff.** Run the linter across the project:
-   ```bash
-   uv run ruff check .
-   ```
-   `explore.py` is a teammate's quick exploratory script — it works, but it's full
-   of the small stuff that fails review (unused imports, `== None`, dead
-   variables, ...). Fix every finding until `ruff check` is clean. Some you can
-   auto-fix; do the rest by hand and understand each one.
-   ```bash
-   uv run ruff check . --fix      # let it fix the safe ones, then read what's left
-   ```
-2. **Wire the pipeline.** Implement `main()` in `pipeline.py`:
-   `ingest → fetch → load → transform`, printing the landed count and the
-   dictionaries of loaded/transformed row counts. Close the DuckDB connection
-   when finished. Checkpoint (offline):
-   ```bash
-   uv run pytest tests/test_pipeline.py
-   ```
-3. **Run it end to end** (RustFS up):
-   ```bash
-   uv run de-pipeline
-   ```
-4. **Review the result.** Run `uv run python -m de_pipeline.explore` and
-   explain two lint fixes and why raw records land before transformation.
-5. **Final checkpoint** — whole suite green and the linter clean:
-   ```bash
-   uv run pytest
-   uv run ruff check .
-   ```
+There is no data-generation or S3-seeding step. The Rick and Morty API
+is the source, and the ingestion stage populates the bucket.
 
-> **Where this is heading:** you now have hand-written transforms *and* a real
-> ingestion layer. Next we meet **dbt** — the framework the industry uses to
-> organize exactly the kind of SQL transforms you've been writing by hand.
+The API is public and does not require a key. The client nevertheless
+supports optional bearer-token authentication:
+
+``` text
+Authorization: Bearer <token>
+```
+
+For a normal live run, `API_TOKEN` can remain blank.
+
+On Windows, the environment file can be copied with:
+
+``` text
+copy .env.example .env
+```
+
+## API ingestion
+
+### HTTP client and authentication
+
+`build_client()` creates a reusable `httpx.Client` pointed at the
+configured API base URL. When an API token is configured, the client
+sends it as a bearer token. When no token is present, the authorization
+header is omitted.
+
+This behavior is covered independently so the authentication path can be
+verified without requiring credentials against the public API.
+
+### Page retrieval
+
+`fetch_page()` requests a character page from:
+
+``` text
+/character?page=<page>
+```
+
+Successful responses are returned as decoded JSON. Non-retryable HTTP
+errors fail immediately, while rate-limit responses and transport
+failures enter the retry path.
+
+A live request can be exercised with:
+
+``` bash
+uv run python -m de_pipeline.api
+```
+
+### Pagination
+
+`fetch_all_characters()` begins at page 1 and follows the API's
+`info.next` value until it becomes `null`. The same HTTP client is
+reused across requests, and each page's `results` collection is
+accumulated into one character dataset.
+
+### Rate limiting and retries
+
+The ingestion layer treats `429 Too Many Requests` as a retryable
+condition rather than an immediate failure.
+
+When the server supplies a numeric `Retry-After` header, that value
+determines the delay before the next attempt. When the header is absent,
+the retry strategy uses exponential waits of 1, 2, 4, ... seconds with a maximum wait of 30 seconds.
+
+Transient transport failures are also retried. Retry attempts are capped
+by `MAX_ATTEMPTS`, while other HTTP errors fail without retrying.
+
+The retry behavior is implemented with `tenacity`, keeping attempt
+limits and backoff policy explicit instead of maintaining a custom retry
+loop.
+
+Tests simulate `429` responses and transport behavior with a fake HTTP
+transport, so retry handling can be validated without intentionally
+throttling the public API.
+
+## Raw landing strategy
+
+After pagination completes, `land_to_s3()` writes the combined character
+records to object storage as a single JSON array.
+
+The raw records are preserved before transformation. The API's page-level `info` envelopes and
+HTTP headers are not stored; the `results` from all pages are combined into the raw object.
+
+Each ingest replaces the same S3 object. Keeping an untouched raw copy provides a replay point for the rest of
+the pipeline. If transformation logic changes or fails, the downstream
+stages can be rerun against the landed source data without making another series of API calls.
+
+`ingest()` combines the two operations:
+
+``` text
+fetch all characters → land raw JSON
+```
+
+## Loading and transformation
+
+Once the API data has been landed, the pipeline returns to the
+established ELT workflow.
+
+The raw object is fetched from S3-compatible storage and loaded into
+DuckDB. The transformation layer then applies the existing
+data-engineering patterns to the character and episode schema, including
+deduplication, normalization, summarization, and list expansion with
+Polars.
+
+The load and transform behavior can be checked directly with:
+
+``` bash
+uv run pytest tests/test_load.py tests/test_transform.py
+```
+
+## Pipeline orchestration
+
+`pipeline.py` connects all stages into one executable workflow:
+
+``` text
+ingest → fetch → load → transform
+```
+
+The pipeline reports the number of records landed and the row counts
+produced by the load and transformation stages. The DuckDB connection is
+closed when processing finishes.
+
+The full pipeline can be run with RustFS available:
+
+``` bash
+uv run de-pipeline
+```
+
+The resulting warehouse data can then be inspected with:
+
+``` bash
+uv run python -m de_pipeline.explore
+```
+
+## Code quality
+
+The exploratory script and the rest of the project were cleaned up with
+Ruff. This removed issues such as unused imports, dead variables, and
+non-idiomatic comparisons while preserving the script's behavior.
+
+Linting can be run with:
+
+``` bash
+uv run ruff check .
+```
+
+Safe automatic fixes can be applied with:
+
+``` bash
+uv run ruff check . --fix
+```
+
+The finished project is expected to remain lint-clean.
+
+## Testing
+
+The test suite covers the API layer, S3 landing behavior, loading,
+transformations, and end-to-end orchestration.
+
+Most tests do not require network access or S3. API tests use a fake
+HTTP transport, which makes authentication, pagination, rate-limit
+handling, and retry timing deterministic.
+
+The S3 fetch test uses the real local object store and skips when RustFS
+is unavailable or when no raw file has been landed yet.
+
+Useful test commands include:
+
+``` bash
+uv run pytest
+uv run pytest tests/test_api.py
+uv run pytest tests/test_api.py::test_build_client_sends_auth_header_when_token_set
+uv run pytest tests/test_api.py::test_build_client_omits_auth_header_without_token
+uv run pytest tests/test_api.py::test_fetch_page_returns_results_and_info
+uv run pytest tests/test_api.py::test_fetch_all_walks_every_page
+uv run pytest tests/test_api.py::test_fetch_all_retries_on_429_then_succeeds
+uv run pytest tests/test_api.py::test_retry_after_header_is_honored
+uv run pytest tests/test_api.py::test_ingest_fetches_all_and_lands
+uv run pytest tests/test_pipeline.py
+```
+
+A focused retry-related run is also available:
+
+``` bash
+uv run pytest tests/test_api.py -k "fetch_page or retry_after or retries"
+```
+
+## Verification
+
+The completed project can be verified with:
+
+``` bash
+uv run pytest
+uv run ruff check .
+uv run de-pipeline
+uv run python -m de_pipeline.explore
+```
+
+A successful end-to-end run retrieves the live character dataset, lands
+the raw records in S3-compatible storage, loads them into DuckDB, and
+builds the transformed warehouse tables.
+
+Running the test suite again after the live pipeline execution also
+allows the S3-backed checkpoint to run against the landed object instead
+of skipping.
 
 ## Working commands
 
-```bash
-uv run pytest                              # whole suite
-uv run pytest tests/test_api.py            # the API checkpoints (offline)
-uv run pytest tests/test_api.py::test_name # one checkpoint
-uv run ruff check .                        # lint (the Day-3 tool)
-uv run ruff check . --fix                  # auto-fix the safe findings
-uv run python -m de_pipeline.api           # hit the real API once, by hand
-uv run de-pipeline                         # the whole thing, end to end
+``` bash
+uv run pytest                          # run the full test suite
+uv run pytest tests/test_api.py        # run API tests
+uv run ruff check .                    # lint the project
+uv run ruff check . --fix              # apply safe Ruff fixes
+uv run python -m de_pipeline.api       # exercise live API ingestion
+uv run de-pipeline                     # run the complete pipeline
+uv run python -m de_pipeline.explore   # inspect transformed results
 ```
-
-## How you'll know you're done
-
-`uv run pytest` is green, `uv run ruff check .` reports no problems, and
-`uv run de-pipeline` runs the whole thing — ingesting live characters, landing
-them in S3, and building the warehouse tables. Run the suite again after that
-live run so the S3 checkpoint passes rather than skips. Confirm the exploration
-script still works after your lint cleanup.
 
 ## Troubleshooting
 
-- **`docker compose ps` shows `unhealthy`/`starting`** — give it 20-30s; check
-  `docker compose logs rustfs`.
-- **Port 9000/9001 already in use** — usually an earlier week's RustFS. Stop it
-  (`cd ../week-2 && docker compose down`) or change the left-hand port in
-  `docker-compose.yml` and update `S3_ENDPOINT_URL` in `.env`.
-- **`httpx.ConnectError` / timeouts on the live run** — you need internet for the
-  real API. The tests don't (they use a fake transport), so develop against those.
-- **A 429 in the wild** — that's the lesson, not a bug. Your tenacity retry should
-  wait and recover. If it gives up, check you're honoring `Retry-After`.
-- **Windows** — use `copy .env.example .env`. If VS Code doesn't pick up the env,
-  Command Palette → *Python: Select Interpreter* → the one under `.venv`.
+### RustFS remains `starting` or `unhealthy`
+
+Allow roughly 20--30 seconds for startup, then inspect the container:
+
+``` bash
+docker compose ps
+docker compose logs rustfs
+```
+
+### Ports 9000 or 9001 are already in use
+
+Another RustFS instance may already be running. Stop the earlier
+container or change the host-side port in `docker-compose.yml` and
+update `S3_ENDPOINT_URL` in `.env` to match.
+
+### Live API requests fail with `httpx.ConnectError` or timeouts
+
+The live ingestion commands require internet access. The API unit tests
+do not, because they use a fake transport.
+
+### A live request receives `429 Too Many Requests`
+
+The retry layer should honor `Retry-After` when present and fall back to
+exponential backoff otherwise. 
+
+### VS Code does not detect the virtual environment
+
+Use the Command Palette and select:
+
+``` text
+Python: Select Interpreter
+```
+
+Then choose the interpreter under `.venv`.
+
+## Result
+
+The project now has a complete ingestion-to-transformation path built
+around a live HTTP source. The API layer handles authentication,
+pagination, transient failures, and rate limiting; raw records are
+preserved in object storage before transformation; and the existing
+DuckDB and Polars workflow processes the landed data into
+warehouse-ready tables.
+
+The result is a reusable pipeline structure in which source acquisition
+is cleanly separated from downstream ELT logic. That separation makes
+the raw data replayable, keeps API concerns isolated, and allows the
+transformation stages to evolve without repeatedly calling the source
+system.
