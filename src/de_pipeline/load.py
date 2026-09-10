@@ -1,4 +1,4 @@
-"""Stage 3 of the pipeline — load the raw landed file into DuckDB, AS-IS.
+"""Stage 3 of the pipeline — loads the raw landed file into DuckDB, AS-IS.
 
 Opens the shared DuckDB database and loads the raw characters file into ``raw_characters`` without
 cleaning anything.
@@ -17,13 +17,13 @@ DB_PATH = Path("data/warehouse.duckdb")
 
 
 def connect(db_path: Path = DB_PATH) -> duckdb.DuckDBPyConnection:
-    """Open (creating it if needed) the DuckDB database and return the connection."""
+    """Opens (creating it if needed) the DuckDB database and returns the connection."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
     return duckdb.connect(str(db_path))
 
 
 def load_characters(con: duckdb.DuckDBPyConnection, raw_dir: Path = RAW_DIR) -> int:
-    """Load ``raw_dir/characters.json`` into ``raw_characters``; return the count."""
+    """Loads ``raw_dir/characters.json`` into ``raw_characters``; returns the count."""
     con.execute("DROP TABLE IF EXISTS raw_characters")
     con.execute(
         "CREATE TABLE raw_characters AS SELECT * FROM read_json_auto(?)",
@@ -33,7 +33,7 @@ def load_characters(con: duckdb.DuckDBPyConnection, raw_dir: Path = RAW_DIR) -> 
 
 
 def load_all(con: duckdb.DuckDBPyConnection, raw_dir: Path = RAW_DIR) -> dict[str, int]:
-    """Load the raw file(s); return ``{"raw_characters": <count>}``."""
+    """Loads the raw file(s); returns ``{"raw_characters": <count>}``."""
     return {
         "raw_characters": load_characters(con, raw_dir),
     }

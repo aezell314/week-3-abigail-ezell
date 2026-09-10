@@ -12,7 +12,7 @@ RAW_DIR = Path("data/raw")
 
 
 def fetch_object(key: str, dest_dir: Path = RAW_DIR) -> Path:
-    """Download the object ``key`` from the bucket into ``dest_dir``; return the
+    """Downloads the object ``key`` from the bucket into ``dest_dir``; returns the
     local path it was written to."""
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / key
@@ -22,7 +22,7 @@ def fetch_object(key: str, dest_dir: Path = RAW_DIR) -> Path:
 
 
 def fetch_all(dest_dir: Path = RAW_DIR) -> dict[str, Path]:
-    """Download the landed source file(s); return ``{"characters": <path>}``."""
+    """Downloads the landed source file(s); returns ``{"characters": <path>}``."""
     return {
         "characters": fetch_object(settings.characters_key, dest_dir),
     }

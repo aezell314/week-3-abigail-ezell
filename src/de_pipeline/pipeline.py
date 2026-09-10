@@ -9,9 +9,9 @@ from de_pipeline import api, fetch, load, transform  # noqa: F401
 
 
 def main() -> None:
-    """Run the full pipeline end to end: ingest the character data from the API,
-    land to S3 bucket, fetch the raw data from S3, open a DuckDB
-    connection, load the raw tables, run the transforms, and print a summary."""
+    """Runs the full pipeline end to end: ingests the character data from the API,
+    lands to S3 bucket, fetches the raw data from S3, opens a DuckDB
+    connection, loads the raw tables, runs the transforms, and prints a summary."""
     print("1. Ingesting data from API and uploading to S3...")
     totalchars = api.ingest()
     print(f"Ingested {totalchars} total characters from the API.")

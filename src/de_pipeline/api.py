@@ -30,10 +30,10 @@ MAX_ATTEMPTS = 5
 
 
 class RateLimitError(Exception):
-    """Raised when the API answers 429 (Too Many Requests). Provided for you.
+    """Raised when the API answers 429 (Too Many Requests).
 
     It carries the server's ``Retry-After`` value (seconds) when one was sent, so
-    your retry logic can wait exactly as long as the server asked instead of
+    the retry logic can wait exactly as long as the server asked instead of
     guessing.
     """
 
@@ -41,32 +41,13 @@ class RateLimitError(Exception):
         self.retry_after = retry_after
         super().__init__(f"rate limited (retry_after={retry_after})")
 
-
-# --------------------------------------------------------------------------- #
-# Day 1 — build a client and make the first call
-# --------------------------------------------------------------------------- #
-
-
 def build_client(
     *,
     base_url: str | None = settings.api_base_url,
     token: str | None = settings.api_token,
     transport: httpx.BaseTransport | None = None,
 ) -> httpx.Client:
-    """Return an ``httpx.Client`` pointed at the API.
-
-    - Default ``base_url`` to ``settings.api_base_url`` and ``token`` to
-      ``settings.api_token`` (import them from ``de_pipeline.config``).
-    - Always send a ``User-Agent`` and ``Accept: application/json``.
-    - Auth: if (and only if) a token is set, add
-      ``Authorization: Bearer <token>`` — a common API auth pattern.
-      Leave it blank for the public API; wiring it is the point, and the tests
-      check you send it (and that you DON'T when there's no token).
-    - Use ``DEFAULT_TIMEOUT``.
-
-    Pass ``transport`` straight through to ``httpx.Client(transport=...)``. You
-    won't use it in normal runs — it's the injection point the tests use to drive
-    your client with a fake transport instead of the network.
+    """Returns an ``httpx.Client`` pointed at the API.
     """
     client = httpx.Client()
     headers = {"User-Agent": "Week3App/1.0.0", "Accept": "application/json"}
@@ -108,23 +89,7 @@ def custom_wait_strategy(retry_state):
     reraise=True
 )
 def fetch_page(page: int = 1, *, client: httpx.Client | None = None) -> dict:
-    """Fetch one page of characters and return the parsed JSON dict.
-
-    Day 1 (happy path): GET ``/character?page=<page>`` (pass ``page`` as a query
-    param, don't build the string yourself), raise on HTTP errors, return
-    ``response.json()``. If ``client`` is None, build one with ``build_client()``
-    (and close it when you're done).
-
-    Day 2 (make it resilient): a 429 means "slow down", not "fail". When you see
-    ``response.status_code == 429``, read the ``Retry-After`` header and raise
-    ``RateLimitError(...)`` instead of returning — then wrap this function with a
-    tenacity ``@retry`` so it waits and tries again. Retry on ``RateLimitError``
-    and ``httpx.TransportError``; stop after ``MAX_ATTEMPTS``; for the wait, honor
-    ``Retry-After`` when present and otherwise back off exponentially (1s, 2s,
-    4s, ... capped at 30s). Support numeric seconds (including zero); HTTP-date
-    headers and malformed values are optional extensions.
-    Tip: a custom ``wait`` callable receives the retry state, so
-    it can pull ``retry_after`` off the raised ``RateLimitError``.
+    """Fetches one page of characters and return the parsed JSON dict.
     """
     should_close = False
     if client is None:
@@ -149,19 +114,8 @@ def fetch_page(page: int = 1, *, client: httpx.Client | None = None) -> dict:
         if should_close:
             client.close()
 
-
-# --------------------------------------------------------------------------- #
-# Day 2 — pagination: walk every page
-# --------------------------------------------------------------------------- #
-
 def fetch_all_characters(*, client: httpx.Client | None = None) -> list[dict]:
-    """Fetch EVERY character by walking the pages until there are no more.
-
-    Start at page 1; after each page, ``info.next`` tells you whether another
-    page exists (it's the next page's URL, or null on the last page). Collect all
-    the ``results`` into one list and return it. Build ONE client and reuse it
-    across pages (pass it into ``fetch_page``) so you're not paying connection
-    setup on every request. Close clients you create; leave supplied clients open.
+    """Fetches EVERY character by traversing the API pages until there are no more.
     """
     should_close = client is None
     if client is None:
@@ -187,28 +141,11 @@ def fetch_all_characters(*, client: httpx.Client | None = None) -> list[dict]:
         if should_close:
             client.close()
 
-# --------------------------------------------------------------------------- #
-# Day 1/2 — land the raw response in S3 (the "land raw" principle)
-# --------------------------------------------------------------------------- #
-
-
 def land_to_s3(records: list[dict],
                 *,
                 s3_client=None,
                 key: str | None = settings.characters_key) -> int:
-    """Upload ``records`` to S3 as one JSON array, untransformed; return the count.
-
-    This is the Week 1 S3 move in reverse: instead of downloading, you upload the
-    raw API payload to ``s3://<bucket>/<characters_key>`` so the downstream
-    pipeline can read it like any other landed file.
-
-      - default ``s3_client`` to ``config.get_s3_client()`` and ``key`` to
-        ``settings.characters_key``;
-      - make sure the bucket exists (head it, create it on failure — like the
-        Week 1-2 seed script);
-      - ``json.dumps`` the records, encode to bytes, and ``put_object`` them.
-
-    Land it RAW — don't clean or reshape here; that's transform.py's job.
+    """Uploads ``records`` to S3 as one JSON array, untransformed; returns the count.
     """
     if s3_client is None:
         s3_client = get_s3_client()
@@ -234,11 +171,9 @@ def land_to_s3(records: list[dict],
 
 
 def ingest(*, client: httpx.Client | None = None, s3_client=None) -> int:
-    """The capstone: fetch all characters from the API and land them raw in S3.
-
-    This is "API-fetch-to-S3" — the one new stage at the front of the pipeline.
-    Call ``fetch_all_characters`` then ``land_to_s3``; return how many landed.
+    """Fetches all characters from the API and land them raw in S3.
     """
+
     fullchars = fetch_all_characters(client=client)
     return land_to_s3(fullchars, s3_client=s3_client)
 

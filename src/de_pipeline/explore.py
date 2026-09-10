@@ -9,6 +9,9 @@ from de_pipeline.load import connect
 
 
 def top_species(con, limit=5, seen=None):
+    """
+    Fetch the top n species represented among all Rick and Morty characters
+    """
     rows = con.execute(
         "SELECT species, character_count FROM species_summary "
         "ORDER BY character_count DESC LIMIT ?",
@@ -18,6 +21,9 @@ def top_species(con, limit=5, seen=None):
 
 
 def species_dict(con) -> dict[str, int]:
+    """
+    Returns the species and count of the top 5 species among all Rick and Morty characters
+    """
     out: dict[str, int] = {}
     for species, count in top_species(con):
         out[species] = count
@@ -25,6 +31,9 @@ def species_dict(con) -> dict[str, int]:
 
 
 def busiest_episodes(con, limit=5) -> list:
+    """
+    Returns the episode and appearance count of the episodes with the top n appearances
+    """
     return con.execute(
         "SELECT episode_id, appearance_count FROM episode_appearances "
         "ORDER BY appearance_count DESC LIMIT ?",
@@ -33,6 +42,10 @@ def busiest_episodes(con, limit=5) -> list:
 
 
 def describe(con):
+    """
+    Prints a message if a human is found among the top 5 species.
+    Prints the episode id and character count for the top 5 busiest episodes.
+    """
     species = species_dict(con)
     if "Human" in species:
         print("humans found")

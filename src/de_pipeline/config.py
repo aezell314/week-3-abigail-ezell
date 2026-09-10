@@ -33,7 +33,7 @@ class Settings:
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    """Read settings from the environment once and cache them."""
+    """Reads settings from the environment once and caches them."""
     return Settings(
         api_base_url=os.getenv("API_BASE_URL", "https://rickandmortyapi.com/api"),
         api_token=os.getenv("API_TOKEN", ""),
@@ -47,7 +47,7 @@ def get_settings() -> Settings:
 
 
 def get_s3_client() -> BaseClient:
-    """Return a boto3 S3 client configured for the local RustFS endpoint."""
+    """Returns a boto3 S3 client configured for the local RustFS endpoint."""
     s = get_settings()
     return boto3.client(
         "s3",
