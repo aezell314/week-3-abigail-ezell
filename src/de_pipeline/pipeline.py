@@ -1,13 +1,4 @@
-"""Day 3 — wire the whole thing into one end-to-end run.
-
-This is the entry point for ``uv run de-pipeline``. Week 3 adds ONE stage at the
-front — ingest from the API into S3 — and the rest is the pipeline you already
-know:
-
-    ingest (API -> S3) -> fetch (S3 -> local) -> load (-> DuckDB) -> transform
-
-Print a short, human-readable summary so a person can see what happened
-(how many characters landed, the row counts per table, a headline number or two).
+"""Connects the api, fetch, load, and transform modules into one end-to-end pipeline.
 """
 
 from __future__ import annotations
@@ -18,9 +9,31 @@ from de_pipeline import api, fetch, load, transform  # noqa: F401
 
 
 def main() -> None:
-    """Run the full pipeline end to end and print a summary."""
-    raise NotImplementedError("Day 3: orchestrate ingest -> fetch -> load -> transform")
+    """Run the full pipeline end to end: ingest the character data from the API,
+    land to S3 bucket, fetch the raw data from S3, open a DuckDB
+    connection, load the raw tables, run the transforms, and print a summary."""
+    print("1. Ingesting data from API and uploading to S3...")
+    totalchars = api.ingest()
+    print(f"Ingested {totalchars} total characters from the API.")
 
+    print("2. Fetching raw files...")
+    paths = fetch.fetch_all()
+
+    for name, path in paths.items():
+        print(f"Successfully downloaded {name} to {path}")
+
+    print("3. Loading raw files into a DuckDB warehouse...")
+    con = load.connect()
+    loads = load.load_all(con)
+    for name, rows in loads.items():
+        print(f"Successfully loaded table \'{name}\' with {rows} rows")
+
+    print("4. Cleaning and aggregating raw data using DuckDB and Polars...")
+    transforms = transform.run_transforms(con)
+    for name, rows in transforms.items():
+        print(f"Successfully loaded table \'{name}\' with {rows} rows")
+
+    con.close()
 
 if __name__ == "__main__":
     main()

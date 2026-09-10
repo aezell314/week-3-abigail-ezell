@@ -1,9 +1,7 @@
-"""Stage 3 — load the raw landed file into DuckDB, AS-IS.
+"""Stage 3 of the pipeline — load the raw landed file into DuckDB, AS-IS.
 
-PROVIDED — same shape as Weeks 1-2. Open the shared DuckDB database and load the
-raw characters file into ``raw_characters`` without cleaning anything. The nested
-``origin`` / ``location`` objects land as structs and ``episode`` lands as a
-list — that's fine, transform.py deals with it (the "T" in ELT).
+Opens the shared DuckDB database and loads the raw characters file into ``raw_characters`` without
+cleaning anything.
 """
 
 from __future__ import annotations

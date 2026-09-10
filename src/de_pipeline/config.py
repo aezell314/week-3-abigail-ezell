@@ -1,8 +1,4 @@
 """Central configuration, read from environment variables (or a local .env).
-
-Provided for you — you should not need to change it. New this week: the API
-settings (``api_base_url`` / ``api_token``) alongside the same S3 settings and
-client you've used since Week 1.
 """
 
 from __future__ import annotations

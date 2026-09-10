@@ -1,21 +1,5 @@
-"""Stage 4 — the warehouse transforms.
+"""Stage 4 of the pipeline — the warehouse transforms.
 
-PROVIDED — this is the Week 2 toolkit applied to the character data, so you can
-keep your attention on the new API ingestion. Study it; you don't rewrite it.
-(It's still worth reading: every move here is one you made by hand in Week 2.)
-
-The raw table has the usual API-shaped quirks:
-
-  raw_characters
-    - ``id`` can repeat if pages shifted under you mid-fetch (pagination drift)
-      -> keep one row per id.
-    - ``status`` is "Alive" / "Dead" / "unknown" (and the odd blank) -> normalize.
-    - ``origin`` and ``location`` are nested structs ``{name, url}`` -> flatten.
-    - ``created`` is an ISO-8601 timestamp string -> parse to a DATE.
-    - ``episode`` is a LIST of episode URLs -> count them, and (in Polars) explode
-      them to see which episodes have the most characters.
-
-The four transforms mirror Week 2 one-for-one:
   dedupe_characters    -> ROW_NUMBER() dedup (one row per id)
   clean_characters     -> normalize/flatten/parse, derive episode_count
   species_summary      -> group + aggregate, with a bound `min_count` parameter
@@ -28,14 +12,11 @@ import duckdb
 
 
 def dedupe_characters(con: duckdb.DuckDBPyConnection) -> int:
-    """Build ``characters_deduped`` with exactly one row per ``id``.
+    """Builds ``characters_deduped`` with exactly one row per ``id``.
 
     APIs don't promise a stable order across pages: if a record is added while
-    you're paging, the same id can land on two pages. ROW_NUMBER() over the id
-    keeps one row per id. The fixture duplicates are identical; ORDER BY id
-    does not choose a deterministic winner if same-id payloads disagree.
-    Unlike Week 2, this source has no update/version field to select the latest
-    record. Deduplication also cannot recover records missed during pagination.
+    paging, the same id can land on two pages. ROW_NUMBER() over the id
+    keeps one row per id. However, deduplication cannot recover records missed during pagination.
     """
     con.execute(
         """
@@ -55,7 +36,7 @@ def dedupe_characters(con: duckdb.DuckDBPyConnection) -> int:
 
 
 def clean_characters(con: duckdb.DuckDBPyConnection) -> int:
-    """Build ``clean_characters`` from ``characters_deduped``:
+    """Builds ``clean_characters`` from ``characters_deduped``:
 
       - normalize ``status`` (lower/trim, blanks -> 'unknown');
       - flatten the nested ``origin`` / ``location`` structs to ``origin_name`` /
@@ -86,13 +67,12 @@ def clean_characters(con: duckdb.DuckDBPyConnection) -> int:
 
 
 def species_summary(con: duckdb.DuckDBPyConnection, min_count: int = 1) -> int:
-    """Build ``species_summary`` — one row per species with ``character_count``,
+    """Builds ``species_summary`` — one row per species with ``character_count``,
     ``alive_count`` and ``location_count`` (distinct locations) — from
     ``clean_characters``.
 
-    ``min_count`` is a threshold (keep species with at least that many
-    characters) and is passed to SQL as a BOUND parameter (``$min_count``), never
-    an f-string — same discipline as Week 2.
+    ``min_count`` is a threshold (keeps species with at least that many
+    characters) and is passed to SQL as a BOUND parameter (``$min_count``).
     """
     con.execute(
         """
@@ -113,14 +93,13 @@ def species_summary(con: duckdb.DuckDBPyConnection, min_count: int = 1) -> int:
 
 
 def episode_appearances(con: duckdb.DuckDBPyConnection) -> int:
-    """Build ``episode_appearances`` (columns ``episode_id``, ``appearance_count``)
+    """Builds ``episode_appearances`` (columns ``episode_id``, ``appearance_count``)
     — how many distinct characters appear in each episode, one row per episode.
 
-    PROVIDED in Polars, applying Week 2's tool-choice pattern.
     ``episode`` is a list column; exploding it
     into one row per (character, episode) and counting reads more naturally as a
-    DataFrame op than in SQL. Dedup characters by id first (pagination drift),
-    pull the episode id out of each URL, explode, group, count.
+    DataFrame op than in SQL. Dedupes characters by id first (pagination drift),
+    pulls the episode id out of each URL, explodes, groups, counts.
     """
     import polars as pl
 
@@ -128,7 +107,7 @@ def episode_appearances(con: duckdb.DuckDBPyConnection) -> int:
 
     out = (
         chars.unique(subset="id", keep="first")
-        .explode("episode")
+        .explode("episode", empty_as_null=True)
         .filter(pl.col("episode").is_not_null())
         # episode URLs look like ".../api/episode/42" — keep the trailing number.
         .with_columns(
@@ -145,7 +124,7 @@ def episode_appearances(con: duckdb.DuckDBPyConnection) -> int:
 
 
 def run_transforms(con: duckdb.DuckDBPyConnection) -> dict[str, int]:
-    """Run every transform in order; return ``{table_name: row_count}``."""
+    """Runs every transform in order; returns ``{table_name: row_count}``."""
     return {
         "characters_deduped": dedupe_characters(con),
         "clean_characters": clean_characters(con),

@@ -1,27 +1,10 @@
-"""Ingest from a real HTTP API and land it raw in S3.
-
-Until now the data simply *appeared* in S3. This week you go get it yourself,
-from a live API, and meet the ugly realities that come with that: auth,
-pagination, and rate limits. The destination is unchanged — you land the raw API
-records into S3 (the "land raw" principle), and the rest of the pipeline
-(fetch -> load -> transform) reads from S3 exactly as before.
+"""Ingest data from a real HTTP API and land it raw in S3.
 
 Source: the Rick and Morty API — https://rickandmortyapi.com/documentation/
   GET /character?page=N  ->  {"info": {"count", "pages", "next", "prev"},
                               "results": [ {id, name, status, species, ...}, ... ]}
   The response is paginated 20 per page; ``info.next`` is the URL of the next
   page, or null on the last page.
-
-THE ARC OF THE WEEK
-  Day 1  First API call. Build an httpx client (with auth wired the way real
-         APIs need), fetch ONE page, look at the raw shape, and land raw to S3.
-  Day 2  Pagination + rate limits. Walk every page until ``info.next`` is null,
-         and make the request resilient: retry on 429 with tenacity, honoring
-         the server's ``Retry-After`` header, with exponential backoff otherwise.
-  Day 3  Wire it into pipeline.py, clean everything with ruff.
-
-You implement every function below. ``RateLimitError`` is provided to get you
-started — it's the exception you'll raise on a 429 and retry around.
 
 Docs:
   - httpx client:     https://www.python-httpx.org/api/#client
@@ -33,7 +16,6 @@ Docs:
 from __future__ import annotations
 
 import json
-import time
 from email.utils import parsedate_to_datetime
 
 import httpx

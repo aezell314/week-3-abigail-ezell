@@ -1,9 +1,4 @@
-"""Stage 2 — fetch the raw landed file from S3.
-
-PROVIDED — carried over from Weeks 1-2, study it but you don't rewrite it. This
-is the part of the pipeline that stays exactly the same when the *source* changes
-from a file drop to an API: once ``api.ingest()`` has landed ``characters.json``
-in S3, this downloads it into ``data/raw/`` like always.
+"""Stage 2 of the pipeline — fetch the raw landed file from S3.
 """
 
 from __future__ import annotations
