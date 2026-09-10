@@ -1,4 +1,4 @@
-"""Days 1-2 — the real work: ingest from a real HTTP API and land it raw in S3.
+"""Ingest from a real HTTP API and land it raw in S3.
 
 Until now the data simply *appeared* in S3. This week you go get it yourself,
 from a live API, and meet the ugly realities that come with that: auth,
@@ -32,7 +32,15 @@ Docs:
 
 from __future__ import annotations
 
+import json
+import time
+from email.utils import parsedate_to_datetime
+
 import httpx
+from botocore.exceptions import ClientError
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+
+from de_pipeline.config import get_s3_client, settings
 
 USER_AGENT = "nss-intro-to-de/week-3"
 DEFAULT_TIMEOUT = httpx.Timeout(10.0)
@@ -59,8 +67,8 @@ class RateLimitError(Exception):
 
 def build_client(
     *,
-    base_url: str | None = None,
-    token: str | None = None,
+    base_url: str | None = settings.api_base_url,
+    token: str | None = settings.api_token,
     transport: httpx.BaseTransport | None = None,
 ) -> httpx.Client:
     """Return an ``httpx.Client`` pointed at the API.
@@ -78,9 +86,45 @@ def build_client(
     won't use it in normal runs — it's the injection point the tests use to drive
     your client with a fake transport instead of the network.
     """
-    raise NotImplementedError("Day 1: build the httpx client (with auth wired)")
+    client = httpx.Client()
+    headers = {"User-Agent": "Week3App/1.0.0", "Accept": "application/json"}
+    if token:
+      headers["authorization"] = f"Bearer {token}"
+    client = httpx.Client(headers=headers, timeout=DEFAULT_TIMEOUT, transport=transport)
+    return client
 
+def custom_wait_strategy(retry_state):
+    """
+    Honors the Retry-After header if present in RateLimitError;
+    otherwise, falls back to exponential backoff.
+    """
+    # Check if the last failed attempt threw a RateLimitError
+    if retry_state.outcome.failed:
+        exception = retry_state.outcome.exception()
+        if isinstance(exception, RateLimitError) and exception.retry_after:
+            try:
+                # Handle numeric seconds (e.g., "5" or "0")
+                return float(exception.retry_after)
+            except ValueError:
+                # Handle HTTP-date headers (e.g., "Wed, 21 Oct 2015 07:28:00 GMT")
+                try:
+                    target_time = parsedate_to_datetime(exception.retry_after)
+                    delay = (target_time - target_time.now(target_time.tzinfo)).total_seconds()
+                    return max(0.0, delay)
+                except Exception:
+                    # Malformed header fallback
+                    pass
 
+    # Fallback to standard exponential backoff: 1s, 2s, 4s, ... capped at 30s
+    fallback = wait_exponential(multiplier=1, min=1, max=30)
+    return fallback(retry_state=retry_state)
+
+@retry(
+    retry=retry_if_exception_type((RateLimitError, httpx.TransportError)),
+    stop=stop_after_attempt(MAX_ATTEMPTS),
+    wait=custom_wait_strategy,
+    reraise=True
+)
 def fetch_page(page: int = 1, *, client: httpx.Client | None = None) -> dict:
     """Fetch one page of characters and return the parsed JSON dict.
 
@@ -100,13 +144,33 @@ def fetch_page(page: int = 1, *, client: httpx.Client | None = None) -> dict:
     Tip: a custom ``wait`` callable receives the retry state, so
     it can pull ``retry_after`` off the raised ``RateLimitError``.
     """
-    raise NotImplementedError("Day 1: GET one page; Day 2: add 429 retry/backoff")
+    should_close = False
+    if client is None:
+        client = build_client()
+        should_close = True
+
+    try:
+        params = {"page": page}
+        response = client.get(
+            url=settings.api_base_url + "/character",
+            params=params
+        )
+
+        # Handle 429 Rate Limits before raise_for_status
+        if response.status_code == 429:
+            raise RateLimitError(response.headers.get("Retry-After"))
+
+        response.raise_for_status()
+        return response.json()
+
+    finally:
+        if should_close:
+            client.close()
 
 
 # --------------------------------------------------------------------------- #
 # Day 2 — pagination: walk every page
 # --------------------------------------------------------------------------- #
-
 
 def fetch_all_characters(*, client: httpx.Client | None = None) -> list[dict]:
     """Fetch EVERY character by walking the pages until there are no more.
@@ -117,15 +181,39 @@ def fetch_all_characters(*, client: httpx.Client | None = None) -> list[dict]:
     across pages (pass it into ``fetch_page``) so you're not paying connection
     setup on every request. Close clients you create; leave supplied clients open.
     """
-    raise NotImplementedError("Day 2: paginate until info.next is null")
+    should_close = client is None
+    if client is None:
+        client = build_client()
 
+    try:
+        all_characters = []
+        page = 1
+
+        while True:
+            data = fetch_page(page, client=client)
+
+            all_characters.extend(data["results"])
+
+            if not data["info"]["next"]:
+                break
+
+            page += 1
+
+        return all_characters
+
+    finally:
+        if should_close:
+            client.close()
 
 # --------------------------------------------------------------------------- #
 # Day 1/2 — land the raw response in S3 (the "land raw" principle)
 # --------------------------------------------------------------------------- #
 
 
-def land_to_s3(records: list[dict], *, s3_client=None, key: str | None = None) -> int:
+def land_to_s3(records: list[dict],
+                *,
+                s3_client=None,
+                key: str | None = settings.characters_key) -> int:
     """Upload ``records`` to S3 as one JSON array, untransformed; return the count.
 
     This is the Week 1 S3 move in reverse: instead of downloading, you upload the
@@ -140,7 +228,27 @@ def land_to_s3(records: list[dict], *, s3_client=None, key: str | None = None) -
 
     Land it RAW — don't clean or reshape here; that's transform.py's job.
     """
-    raise NotImplementedError("Day 1/2: put the raw JSON array to S3")
+    if s3_client is None:
+        s3_client = get_s3_client()
+
+    if key is None:
+        key = settings.characters_key
+
+    bucket = settings.bucket
+
+    try:
+        s3_client.head_bucket(Bucket=bucket)
+    except ClientError:
+        s3_client.create_bucket(Bucket=bucket)
+        print(f"created bucket '{bucket}'")
+
+    json_string = json.dumps(records).encode('utf-8')
+    s3_client.put_object(
+      Bucket=bucket,
+      Key=key,
+      Body=json_string
+    )
+    return len(records)
 
 
 def ingest(*, client: httpx.Client | None = None, s3_client=None) -> int:
@@ -149,7 +257,8 @@ def ingest(*, client: httpx.Client | None = None, s3_client=None) -> int:
     This is "API-fetch-to-S3" — the one new stage at the front of the pipeline.
     Call ``fetch_all_characters`` then ``land_to_s3``; return how many landed.
     """
-    raise NotImplementedError("Day 2: fetch_all_characters -> land_to_s3")
+    fullchars = fetch_all_characters(client=client)
+    return land_to_s3(fullchars, s3_client=s3_client)
 
 
 if __name__ == "__main__":
